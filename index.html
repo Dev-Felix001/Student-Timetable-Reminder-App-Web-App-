@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Student Timetable Reminder</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <h1>Timetable Reminder</h1>
+      <p class="tagline">Add classes and get browser reminders before they start.</p>
+    </header>
+
+    <section class="card form-card" aria-labelledby="add-class-heading">
+      <h2 id="add-class-heading">Add Class / Lecture</h2>
+
+      <form id="classForm" class="form">
+        <label>
+          Class name
+          <input type="text" id="title" required placeholder="e.g. Algorithms" />
+        </label>
+
+        <label>
+          Date
+          <input type="date" id="date" required />
+        </label>
+
+        <label>
+          Start time
+          <input type="time" id="time" required />
+        </label>
+
+        <label>
+          Reminder (minutes before)
+          <input type="number" id="reminder" min="0" value="10" required />
+        </label>
+
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Save</button>
+          <button type="button" id="clearAll" class="btn ghost">Clear All</button>
+        </div>
+      </form>
+
+      <p class="note">Works best on modern browsers. Allow notifications when prompted.</p>
+    </section>
+
+    <section class="card list-card" aria-labelledby="upcoming-heading">
+      <h2 id="upcoming-heading">Upcoming Classes</h2>
+      <ul id="items" class="items" aria-live="polite"></ul>
+      <p id="empty" class="empty">No classes yet — add one above.</p>
+    </section>
+
+    <footer class="footer">
+      <small>Local storage used — reminders persist on this device.</small>
+      <div class="controls">
+        <button id="requestPerm" class="btn small">Request Notification Permission</button>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+  // Simple Timetable Reminder (works with localStorage + Notification API)
+  (function(){
+    const form = document.getElementById('classForm');
+    const titleEl = document.getElementById('title');
+    const dateEl = document.getElementById('date');
+    const timeEl = document.getElementById('time');
+    const reminderEl = document.getElementById('reminder');
+    const itemsEl = document.getElementById('items');
+    const emptyEl = document.getElementById('empty');
+    const clearAllBtn = document.getElementById('clearAll');
+    const requestBtn = document.getElementById('requestPerm');
+
+    const STORAGE_KEY = 'timetable-items-v1';
+    let items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+
+    function save() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    }
+
+    function formatDateTime(d) {
+      return d.toLocaleString();
+    }
+
+    function render() {
+      itemsEl.innerHTML = '';
+      if (!items.length) {
+        emptyEl.style.display = 'block';
+        return;
+      }
+      emptyEl.style.display = 'none';
+      items.sort((a,b)=> new Date(a.when) - new Date(b.when));
+      items.forEach((it, idx) => {
+        const li = document.createElement('li');
+        li.className = 'item';
+        const title = document.createElement('div');
+        title.className = 'item-title';
+        title.textContent = it.title;
+        const meta = document.createElement('div');
+        meta.className = 'item-meta';
+        meta.textContent = `${formatDateTime(new Date(it.when))} — remind ${it.reminder} min before`;
+        const actions = document.createElement('div');
+        actions.className = 'item-actions';
+        const del = document.createElement('button');
+        del.className = 'btn small ghost';
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => {
+          items.splice(idx,1);
+          save();
+          render();
+        });
+        actions.appendChild(del);
+
+        li.appendChild(title);
+        li.appendChild(meta);
+        li.appendChild(actions);
+        itemsEl.appendChild(li);
+      });
+    }
+
+    function scheduleAll() {
+      // Clear existing timers first (not strictly necessary across reloads).
+      // We'll set timeout per item that is still in the future.
+      const now = Date.now();
+      items.forEach(it => {
+        const when = new Date(it.when).getTime();
+        const remindAt = when - (Number(it.reminder) || 0) * 60000;
+        const delay = remindAt - now;
+        if (delay <= 0 && when > now) {
+          // If reminder time passed but class still ahead, notify immediately
+          triggerNotification(it);
+        } else if (delay > 0) {
+          // setTimeout maximum safe is large — but for safety check
+          setTimeout(()=> triggerNotification(it), delay);
+        }
+      });
+    }
+
+    function triggerNotification(item) {
+      const text = `${item.title} starts at ${new Date(item.when).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+      if (window.Notification && Notification.permission === 'granted') {
+        try {
+          new Notification('Class Reminder', { body: text });
+        } catch(e) {
+          alert(`Reminder: ${item.title}\\n${text}`);
+        }
+      } else {
+        // fallback
+        alert(`Reminder: ${item.title}\n${text}`);
+      }
+    }
+
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const title = titleEl.value.trim();
+      const date = dateEl.value;
+      const time = timeEl.value;
+      const reminder = Math.max(0, Number(reminderEl.value || 0));
+      if (!title || !date || !time) return;
+      const when = new Date(date + 'T' + time);
+      if (isNaN(when)) return;
+      items.push({ title, when: when.toISOString(), reminder });
+      save();
+      render();
+      scheduleAll();
+      form.reset();
+      // restore default reminder
+      reminderEl.value = 10;
+    });
+
+    clearAllBtn.addEventListener('click', () => {
+      if (!confirm('Clear all saved classes?')) return;
+      items = [];
+      save();
+      render();
+    });
+
+    requestBtn.addEventListener('click', async () => {
+      if (!('Notification' in window)) {
+        alert('Notifications not supported in this browser.');
+        return;
+      }
+      const p = await Notification.requestPermission();
+      alert('Notification permission: ' + p);
+    });
+
+    // initialize date input default to today
+    (function initDefaults(){
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2,'0');
+      const dd = String(now.getDate()).padStart(2,'0');
+      dateEl.value = `${yyyy}-${mm}-${dd}`;
+    })();
+
+    // load and start scheduling
+    render();
+    scheduleAll();
+
+    // keep UI updated if storage changes (other tab)
+    window.addEventListener('storage', (e) => {
+      if (e.key === STORAGE_KEY) {
+        items = JSON.parse(e.newValue || '[]');
+        render();
+        scheduleAll();
+      }
+    });
+
+  })();
+  </script>
+</body>
+</html>
